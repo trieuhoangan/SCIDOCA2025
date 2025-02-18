@@ -5,6 +5,7 @@ from transformers import AutoTokenizer, DataCollatorWithPadding, AutoModelForSeq
 from datasets import Dataset
 import evaluate
 import numpy as np
+from rank_bm25 import BM25Okapi
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1}
 
@@ -13,16 +14,42 @@ def load_data(data_path):
     filenames = []
     for file in data_files:
         file_id = file.split(".")[0]
-        if file_id not in file:
+        if file_id not in filenames:
             filenames.append(file_id)
-    full_data = merge_input_label(data_path, filenames)
+    full_data = merge_input_label_to_list(data_path, filenames)
     return full_data
+
+def find_correct_citation(label_data):
+    sent_corrects = []
+    print(label_data["correct_citation"])
+    for sent in label_data["correct_citation"]:
+        sent_corrects.extend(label_data["correct_citation"])
+    return list(set(sent_corrects))
+
+def merge_input_label_to_list(data_path, filenames):
+    data = []
+    for filename in filenames:
+        input_full_path = os.path.join(data_path, f"{filename}.in")
+        label_full_path = os.path.join(data_path, f"{filename}.label")
+        with open(input_full_path, 'r', encoding='utf-8') as f:
+            input_data = json.load(f)
+        with open(label_full_path, 'r', encoding='utf-8') as f:
+            label_data = json.load(f)
+        
+        data.append({
+            "text": input_data["text"], 
+            "citation_candidates": input_data["citation_candidates"],
+            "candidate_bib_entries": input_data["bib_entries"],
+            "correct_citation": find_correct_citation(label_data)
+        })
+    return data
+
 
 def merge_input_label(data_path, filenames):
     data = {}
     for filename in filenames:
-        input_full_path = os.path.join(data_path, filename, ".in")
-        label_full_path = os.path.join(data_path, filename, ".label")
+        input_full_path = os.path.join(data_path, f"{filename}.in")
+        label_full_path = os.path.join(data_path, f"{filename}.label")
         with open(input_full_path, 'r', encoding='utf-8') as f:
             input_data = json.load(f)
         with open(label_full_path, 'r', encoding='utf-8') as f:
@@ -36,95 +63,51 @@ def merge_input_label(data_path, filenames):
     return data
 
 def split_data(dataset):
-    dataset = dataset.split_train_test(test_size = 0.2, shuffle = False)
+    dataset = dataset.train_test_split(test_size = 0.2, shuffle = False)
     trainset = dataset["train"]
     test_dataset = dataset["test"]
-    trainset = trainset.split_train_test(test_size = 0.2, shuffle= False)
+    trainset = trainset.train_test_split(test_size = 0.2, shuffle= False)
     train_dataset = trainset["train"]
     valid_dataset = trainset["test"]
 
     return train_dataset, valid_dataset, test_dataset
 
+def build_corpus_from_candidates_abstract(candidates):
+    id_list = candidates.keys()
+    corpus = []
+    for key in candidates:
+        corpus.append(candidates[key])
+    tokenized_corpus = [doc.split(" ") for doc in corpus]
+    bm25 = BM25Okapi(tokenized_corpus)
+    return bm25, id_list
 
+def do_retrieve(sentences, candidates):
+    complete_sent = " ".join(sentences)
+    tokenized_query = complete_sent.split(" ")
+    bm25, id_list = build_corpus_from_candidates_abstract(candidates)
+    doc_scores = bm25.get_scores(tokenized_query)
+    correct_index = doc_scores.index(max(doc_scores))
+    predict_citation = [id_list[correct_index]]
+    return predict_citation
 
 def main(args):
     # Load data
     full_data = load_data(args.data_dir)
-    data_for_clasification = preprocess_for_classification(full_data)
-    dataset = Dataset.from_list(data_for_clasification)
-    
-    # Load model
-    tokenizer = AutoTokenizer.from_pretrained(args.ft_model_id)
-    model = AutoModelForSequenceClassification.from_pretrained(
-            args.ft_model_id, 
-            num_labels=2
-    )
-    
-    # preprocess data
-    accuracy = evaluate.load("accuracy")
-    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
-    def compute_metrics(eval_pred):
-        predictions, labels = eval_pred
-        predictions = np.argmax(predictions, axis=1)
-        return accuracy.compute(predictions=predictions, references=labels)
-    
-    def preprocess_function(examples):
-        return tokenizer(examples["text"], truncation=True)
+    dataset = Dataset.from_list(full_data)
+    print(dataset)
+    train_dataset, valid_dataset, test_dataset = split_data(dataset)
+    print(dataset)
+    count=0
+    correct = 0
+    for row in test_dataset:
+        count+=1
+        print(row["correct_citation"])
+        prediction = do_retrieve(row["text"],row["candidate_bib_entries"])
+        if prediction == row["correct_citation"]:
+            correct+=1
+    print("accuracy: ", correct/count)
 
-    tokenized_dataset = dataset.map(preprocess_function, batched=True)
-    train_dataset, valid_dataset, test_dataset = split_data(tokenized_dataset)
-
-    # train
-    training_args = TrainingArguments(
-        output_dir=args.output_dir,
-        learning_rate=2e-5,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
-        num_train_epochs=args.num_train_epochs,
-        weight_decay=0.01,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=False,
-        push_to_hub=False,
-    )
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=valid_dataset,
-        processing_class=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
-    )
-   
-    # eval
-    if args.do_train:
-        trainer.train()
-    if args.do_eval:
-        if "label" in valid_dataset.features:
-            valid_dataset = valid_dataset.remove_columns("label")
-        predictions = trainer.predict(valid_dataset, metric_key_prefix="predict").predictions
-        output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_predict_file, "w") as writer:
-                writer.write("index\tprediction\n")
-                for index, item in enumerate(predictions):
-                    writer.write(f"{index}\t{item}\n")
-                    
-    if args.do_predict:
-        if "label" in test_dataset.features:
-            test_dataset = test_dataset.remove_columns("label")
-        predictions = trainer.predict(test_dataset, metric_key_prefix="predict").predictions
-        output_predict_file = os.path.join(training_args.output_dir, "predict_results.txt")
-        if trainer.is_world_process_zero():
-            with open(output_predict_file, "w") as writer:
-                writer.write("index\tprediction\n")
-                for index, item in enumerate(predictions):
-                    writer.write(f"{index}\t{item}\n")
     
-
-    return 1
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
