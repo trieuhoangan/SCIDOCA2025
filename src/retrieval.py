@@ -6,6 +6,7 @@ from datasets import Dataset
 import evaluate
 import numpy as np
 from rank_bm25 import BM25Okapi
+from sklearn.metrics import f1_score
 id2label = {0: "NEGATIVE", 1: "POSITIVE"}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1}
 
@@ -85,17 +86,81 @@ def build_corpus_from_candidates_abstract(candidates):
     bm25 = BM25Okapi(tokenized_corpus)
     return bm25, id_list
 
+def get_top_n_indices(values, n):
+    """
+    Return the indices of the top n highest elements in the list 'values'.
+    
+    :param values: A list of float numbers.
+    :param n: The number of top elements to find.
+    :return: A list of indices corresponding to the top n highest values (descending order).
+    """
+    
+    # Get a list of all indices, sorted by their corresponding values in descending order
+    sorted_indices = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+    
+    # Slice the first 'n' indices
+    return sorted_indices[:n]
+
+def calculate_f1_score(preds, labels):
+    correct = 0
+    n_retrived = 0
+    n_relevant = 0
+
+    coverages = []
+
+    for pred, label in list(zip(preds, labels)):
+        
+        # target = row['target']
+        # preds = row['candidates']
+        coverages.append(len(pred))
+
+        n_retrived += len(pred)
+        n_relevant += len(label)
+        for prediction in preds:
+            if prediction in label:
+                correct += 1
+
+    precision = correct / n_retrived
+    recall = correct / n_relevant
+
+    print(f"Average # candidates: {np.mean(coverages)}")
+    print(f"Precision: {precision}")
+    print(f"Recall: {recall}")
+    print(f"F1: {2 * precision * recall / (precision + recall)}")
+
 def do_retrieve(sentences, candidates):
     complete_sent = " ".join(sentences)
     tokenized_query = complete_sent.split(" ")
-    bm25, id_list = build_corpus_from_candidates_abstract(candidates)
+    # bm25, id_list = build_corpus_from_candidates_abstract(candidates)
+    # id_list = list(candidates.keys())
+    id_list = []
+    corpus = []
+    for key in candidates:
+        id_list.append(key)
+        corpus.append("{}. {}".format(candidates[key]['title'],candidates[key]['abstract']))
+    tokenized_corpus = [doc.split(" ") for doc in corpus]
+    # print(len(tokenized_corpus))
+    bm25 = BM25Okapi(tokenized_corpus)
+    
     doc_scores = bm25.get_scores(tokenized_query)
+    
+    preds = []
+
     print("retrieve scores ", doc_scores)
+    top_n = get_top_n_indices(doc_scores, 3)
+    preds = [id_list[i] for i in top_n]
+
     # correct_index = doc_scores.index(max(doc_scores))
-    correct_index = np.argmax(doc_scores)
+    # correct_index = np.argmax(doc_scores)
+    
+    # text_preds =  bm25.get_top_n(tokenized_query, corpus, n=5)
+    # for pred in text_preds:
+    #     pred_index = corpus.index(pred)
+    #     preds.append(id_list[pred_index])
     print("id list", id_list)
-    predict_citation = [id_list[correct_index]]
-    return predict_citation
+    # predict_citation = [id_list[correct_index]]
+    return preds
+
 
 def main(args):
     # Load data
@@ -107,21 +172,25 @@ def main(args):
     # print(dataset)
     # train_dataset, valid_dataset, test_dataset = split_data(dataset)
     # print(dataset)
-    count=0
-    correct = 0
+    preds = []
+    labels = []
     print("start retrieving")
     for row in full_data:
-        count+=1
+        # count+=1
         
-        prediction = do_retrieve(row["text"],row["candidate_bib_entries"])
-        print("row correct_citation ",row["correct_citation"])
+        predictions = do_retrieve(row["text"],row["candidate_bib_entries"])
+        preds.append(predictions)
+        labels.append(row["correct_citation"])
         print("row citation_candidates ",row["citation_candidates"])
+        print("row correct_citation ",row["correct_citation"])
+        print("prediction ", predictions)
         # for co
         print("=="*100)
-        if prediction == row["correct_citation"]:
-            correct+=1
 
-    print("accuracy: ", correct/count)
+        # if prediction == row["correct_citation"]:
+        #     correct+=1
+    calculate_f1_score(preds, labels)
+    # print("accuracy: ", correct/count)
 
     
 
