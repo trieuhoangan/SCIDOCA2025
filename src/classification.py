@@ -77,6 +77,7 @@ def main(args):
     data_for_clasification = preprocess_for_classification(full_data)
     dataset = Dataset.from_list(data_for_clasification)
     print(dataset)
+    dataset = dataset[:5000]
     # Load model
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModelForSequenceClassification.from_pretrained(

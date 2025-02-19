@@ -8,7 +8,7 @@ samples = data_files[:30]
 print(samples)
 full_path=[os.path.join(data_path,filename) for filename in samples]
 # for path in full_path:
-path = full_path[7]
+path = full_path[1]
 print(path)
 with open(path,'r',encoding='utf-8') as f:
     # lines = f.readlines()

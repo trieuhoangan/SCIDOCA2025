@@ -12,6 +12,7 @@ label2id = {"NEGATIVE": 0, "POSITIVE": 1}
 def load_data(data_path):
     data_files = os.listdir(data_path)
     filenames = []
+    
     for file in data_files:
         file_id = file.split(".")[0]
         if file_id not in filenames:
@@ -21,21 +22,23 @@ def load_data(data_path):
 
 def find_correct_citation(label_data):
     sent_corrects = []
-    print(label_data["correct_citation"])
+    # print(label_data["correct_citation"])
     for sent in label_data["correct_citation"]:
         sent_corrects.extend(label_data["correct_citation"])
     return list(set(sent_corrects))
 
 def merge_input_label_to_list(data_path, filenames):
     data = []
-    for filename in filenames:
+    for index, filename in enumerate( filenames):
+        if index > 1000:
+            break
         input_full_path = os.path.join(data_path, f"{filename}.in")
         label_full_path = os.path.join(data_path, f"{filename}.label")
         with open(input_full_path, 'r', encoding='utf-8') as f:
             input_data = json.load(f)
         with open(label_full_path, 'r', encoding='utf-8') as f:
             label_data = json.load(f)
-        
+        print(label_data["correct_citation"])
         data.append({
             "text": input_data["text"], 
             "citation_candidates": input_data["citation_candidates"],
@@ -73,11 +76,12 @@ def split_data(dataset):
     return train_dataset, valid_dataset, test_dataset
 
 def build_corpus_from_candidates_abstract(candidates):
-    id_list = candidates.keys()
+    id_list = list(candidates.keys())
     corpus = []
     for key in candidates:
-        corpus.append(candidates[key])
+        corpus.append("{}. {}".format(candidates[key]['title'],candidates[key]['abstract']))
     tokenized_corpus = [doc.split(" ") for doc in corpus]
+    # print(len(tokenized_corpus))
     bm25 = BM25Okapi(tokenized_corpus)
     return bm25, id_list
 
@@ -86,25 +90,37 @@ def do_retrieve(sentences, candidates):
     tokenized_query = complete_sent.split(" ")
     bm25, id_list = build_corpus_from_candidates_abstract(candidates)
     doc_scores = bm25.get_scores(tokenized_query)
-    correct_index = doc_scores.index(max(doc_scores))
+    print("retrieve scores ", doc_scores)
+    # correct_index = doc_scores.index(max(doc_scores))
+    correct_index = np.argmax(doc_scores)
+    print("id list", id_list)
     predict_citation = [id_list[correct_index]]
     return predict_citation
 
 def main(args):
     # Load data
+    print("loading data")
     full_data = load_data(args.data_dir)
-    dataset = Dataset.from_list(full_data)
-    print(dataset)
-    train_dataset, valid_dataset, test_dataset = split_data(dataset)
-    print(dataset)
+    print("finish loading data")
+    print(len(full_data))
+    # dataset = Dataset.from_list(full_data)
+    # print(dataset)
+    # train_dataset, valid_dataset, test_dataset = split_data(dataset)
+    # print(dataset)
     count=0
     correct = 0
-    for row in test_dataset:
+    print("start retrieving")
+    for row in full_data:
         count+=1
-        print(row["correct_citation"])
+        
         prediction = do_retrieve(row["text"],row["candidate_bib_entries"])
+        print("row correct_citation ",row["correct_citation"])
+        print("row citation_candidates ",row["citation_candidates"])
+        # for co
+        print("=="*100)
         if prediction == row["correct_citation"]:
             correct+=1
+
     print("accuracy: ", correct/count)
 
     
