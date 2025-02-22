@@ -12,6 +12,8 @@ def load_data(data_path):
     data_files = os.listdir(data_path)
     filenames = []
     for file in data_files:
+        if len(filenames) > 4000:
+            continue
         file_id = file.split(".")[0]
         if file_id not in filenames:
             filenames.append(file_id)
@@ -37,16 +39,20 @@ def merge_input_label(data_path, filenames):
 
 def preprocess_for_classification(data):
     processed_data = []
+    sum_label=0
     for id in data:
         data_content = data[id]
         merged_query_text = " ".join(data_content["text"])
-        correct_candidates = []
-        for label in data_content["correct_citation"]:
-            correct_candidates.extend(label)
+        correct_candidates = data_content["correct_citation"]
+        # print("data_content['correct_citation'] ", data_content["correct_citation"])
+        # for label in data_content["correct_citation"]:
+        #     correct_candidates.extend(label)
         correct_candidates = list(set(correct_candidates))
         for candidate in data_content["candidate_bib_entries"]:
-            print(candidate)
+            # print("candidate ", candidate)
+            # print("correct_candidates ", correct_candidates)
             merged_input = "{} . {} . {}".format(merged_query_text, data_content["candidate_bib_entries"][candidate]["title"], data_content["candidate_bib_entries"][candidate]["abstract"])
+            
             if candidate in correct_candidates:
                 current_label = 1
             else:
@@ -57,6 +63,9 @@ def preprocess_for_classification(data):
                     "label":current_label 
                 }
             )
+
+            sum_label+=current_label
+    print(sum_label)
     return processed_data
 
 def split_data(dataset):
@@ -75,9 +84,11 @@ def main(args):
     # Load data
     full_data = load_data(args.data_dir)
     data_for_clasification = preprocess_for_classification(full_data)
+    # for data in data_for_clasification:
+    #     print(data["label"])
     dataset = Dataset.from_list(data_for_clasification)
     print(dataset)
-    dataset = dataset[:5000]
+    # dataset = dataset[:4000]
     # Load model
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -105,12 +116,13 @@ def main(args):
     # train
     training_args = TrainingArguments(
         output_dir=args.output_dir,
-        learning_rate=2e-5,
+        learning_rate=args.learning_rate,
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
-        num_train_epochs=2,
+        num_train_epochs=args.num_train_epochs,
         weight_decay=0.01,
-        eval_strategy="epoch",
+        # eval_strategy="epoch",
+        save_total_limit=1,
         save_strategy="epoch",
         load_best_model_at_end=False,
         push_to_hub=False,
